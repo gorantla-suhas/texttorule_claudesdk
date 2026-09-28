@@ -1,0 +1,51 @@
+# policy_catalog.yaml
+#
+# Source of truth for eligibility and exclusion policies. The
+# orchestrator's `policy` skill reads this to resolve eligibility,
+# exclusions, and conflicts.
+
+version: 1
+
+policies:
+
+  - id: ELIG_PREPAID
+    kind: eligibility_subscriber_type
+    client_scope: [omantel, airtel]
+    active_window: { from: null, to: null }   # always-on
+    subscriber_type: prepaid
+
+  - id: ELIG_POSTPAID
+    kind: eligibility_subscriber_type
+    client_scope: [omantel, airtel]
+    active_window: { from: null, to: null }
+    subscriber_type: postpaid
+
+  - id: ELIG_TENURE_30D
+    kind: eligibility_tenure
+    client_scope: [omantel, airtel]
+    active_window: { from: null, to: null }
+    min_days_on_network: 30
+
+  - id: ELIG_TENURE_90D
+    kind: eligibility_tenure
+    client_scope: [omantel, airtel]
+    active_window: { from: null, to: null }
+    min_days_on_network: 90
+
+  - id: EXCL_BLACKOUT_2024Q4
+    kind: exclusion_blackout
+    client_scope: [airtel]
+    active_window:
+      from: "2024-10-01T00:00:00Z"
+      to: "2024-12-31T23:59:59Z"
+    excluded_audience: [all]
+
+  - id: CONFLICT_NO_MONETARY_CREDIT_2024Q4
+    kind: conflict_override
+    client_scope: [airtel]
+    active_window:
+      from: "2024-10-01T00:00:00Z"
+      to: "2024-12-31T23:59:59Z"
+    conflicts_with:
+      bonus_types: [monetary]
+      action_types: [monetary_credit]

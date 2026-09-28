@@ -1,0 +1,28 @@
+this will give you the import keys and base knowledge required to optimize already existing of architecture we have discussed.
+
+firsts , this use case takes in the natural languege statement given by the user and convert it into intermediate rule which contains nessasory info to parse ito into final rule engine rule json
+
+now what can be there in the user statement
+1) conditions or segments - conditions or segments , usually are bais , for segregating customers in a telcom domian , this basically meant for only customers who meet these conditions
+   now how are these condition represented in the rule engine
+   if user asks about line type , like prepaid customers the they will need to take the kpi (which are column of the customer tables) and represent as kpi = value , here in this case it is Profile_line_type = "Prepaid",
+   for better understanding read the condition file in the same folder
+
+2) actions - action is something which is used to communicate with the customer , for all those customers who satisfy segments, for them there will be different types of actions, like send promotion action , give the layotly points , manage loyalty points etc.
+  for those parameters there will be actions parameters needed for better understanding read the action file , there we have describe 2 actions , send promotion and point accumulation
+
+  all the details of the actions should be placed action.yaml file , and the action name and description in the skills references , so that claude don't need to read the compile file , to get initial understanding, so , when communincating with action tool which actually uses the yaml , the information required can be given by python code its elf , for calude resoning
+
+3). bonus - bonus is part of action usually there will be cases where the in action will will also send the bonus to the user which is call auto bonus case, but for a person to receive a bonus a condition needed to be triggered there are three type currently each have there own parameters as well
+  for better understanding read bonus file
+
+  there will success message and error message that need to be created or taken from db (currently disabled)
+
+4).  benefit is some thing which is given to a bonus trigger (refer bonus file), there will the benefit case on code needed 2 thing , one needed the base required that is extracting of benefit condition and other is to use the sql to get relevent details from table and mapping which is match there , it can be waited matching or a differnet approch
+
+5) schedule there are different types of schedule refer the schedule file , schedule is basiclly whn this rule is executed , there can be multiple if -else cases in a single rule, but there will be only one schedule for a complete rule.
+
+6) policy - currently lets not build policy , but a policy are like contraints on the rule ,  they can be on action level or full rule lven , there are 2 types of policy , one is lead policy and other is contact policy
+
+
+for understanding the final json builder see the final rule json file which take in the if-else rule to give the rule engine rule .

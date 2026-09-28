@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project artifacts
+logs/
+traces/
+*.log
+# Runtime index files (when retriever is implemented)
+logs/*.bin
+logs/*.faiss
+logs/*.index
+logs/audit_*.json
+logs/rule_*.json
+# Dev-only reference material with secrets (use env DB_PASSWORD instead)
+data/sdk_context/db_details

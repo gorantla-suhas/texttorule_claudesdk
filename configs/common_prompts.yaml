@@ -1,0 +1,32 @@
+# common_prompts.yaml
+#
+# Shared prompt fragments the orchestrator appends to system or user
+# prompts. Centralized here so wording changes don't require editing
+# every skill.
+
+version: 1
+
+fragments:
+
+  no_internal_names_in_user_message: |
+    When producing a user-facing summary, do not expose internal column
+    names, group names, table names, seed ids, or template names unless
+    the marketer explicitly asked for them.
+
+  clarification_format: |
+    When clarification is required, do not emit a rule and finish with
+    exactly one line in this form:
+    `Clarification question: <one batched plain-English question>`
+    Do not repeat the question or include internal columns, groups,
+    tables, seeds, or templates.
+
+  runtime_placeholders: |
+    The only legal placeholders in the emitted rule are:
+    - `${operator}` for the main KPI's comparison operator,
+    - `${value}` for the main KPI's threshold value,
+    - `${resolve:<phrase>}` for runtime-relative date resolution.
+    No other placeholders are permitted.
+
+  client_is_required: |
+    The `client` parameter is required input from the API caller.
+    Never infer the client from the user sentence.

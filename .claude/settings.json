@@ -1,0 +1,76 @@
+# ----------------------------------------------------------------------------
+# Claude Agent SDK configuration for the texttorule_engine project.
+#
+# The Claude Agent SDK reads this file at session start. It tells the SDK
+# which project memory sources to load, which model to use, and which
+# subagents are available to the orchestrator.
+#
+# This file is the runtime complement to the .claude/skills/ project skills
+# and the .claude/agents/ agent definitions.
+# ----------------------------------------------------------------------------
+
+{
+  "model": "claude-sonnet-4-5",
+
+  "env": {
+    "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}"
+  },
+
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Read(**)",
+      "Glob(**)",
+      "Grep(**)",
+      "Skill(**)"
+    ],
+    "deny": [
+      "Bash(**)",
+      "Write(**)",
+      "Edit(**)",
+      "WebFetch(**)",
+      "WebSearch(**)"
+    ]
+  },
+
+  "memory": {
+    "enabled": true,
+    "sources": [
+      ".claude/CLAUDE.md",
+      ".claude/skills/**/SKILL.md",
+      ".claude/agents/*.md"
+    ]
+  },
+
+  "agents": {
+    "verifier": {
+      "model": "claude-haiku-4-5",
+      "description": "Independent semantic validator for emitted rules.",
+      "promptFile": ".claude/agents/verifier.md",
+      "tools": ["Skill", "Read", "mcp__rule__validate_rule"],
+      "maxTurns": 5
+    },
+    "builder": {
+      "model": "claude-haiku-4-5",
+      "description": "Composes the final structured Rule JSON from validated skill outputs.",
+      "promptFile": ".claude/agents/builder.md",
+      "tools": ["Skill", "Read", "mcp__rule__render_rule"],
+      "maxTurns": 3
+    }
+  },
+
+  "hooks": {
+    "PreToolUse": "app.hooks:pre_tool_use",
+    "PostToolUse": "app.hooks:post_tool_use"
+  },
+
+  "mcpServers": {
+    "rule": {
+      "command": "python",
+      "args": ["-m", "app.tools"],
+      "env": {
+        "RULE_DATA_DIR": "${RULE_DATA_DIR}"
+      }
+    }
+  }
+}

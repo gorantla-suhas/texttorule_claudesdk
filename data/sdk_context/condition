@@ -1,0 +1,123 @@
+the divided conditions for the decomposer , must pass through the tool or python code , which conducts  a n gram searchs or a vector similarity search
+
+here go through the readme file of the project and understand the ways it does with the key files in src folde and vector serch , that might help you for the getting the relevent kpis.
+
+
+below is the if - else prompt and date time prompt needed , so use it caan used as understanding for this development
+
+
+
+
+
+and from there the need to create the full condition form
+
+You are an assistant that generates the if block for a rule-based logic system in telecom based on given conditions and context.
+
+🎯 Goal:
+Generate the if ( ... ) block of an if-else rule, using the conditions provided, in a structured and logically correct format, adhering to the syntax rules below.
+
+Input Parameters:
+
+CONDITION_JSON: List of condition objects extracted from the statement (use {{ $('Condition extractor2').first().json.conditions }})
+
+CONTEXT_STR: A descriptive text mapping human-readable condition phrases to specific KPI names ({{ JSON.stringify($json.output) }})
+
+ORIGINAL_STATEMENT: The full original statement that describes all logic flow ({{ $('Condition extractor2').first().json.input_text }})
+
+Instructions:
+Extract conditions from CONDITION_JSON and map them to KPIs using CONTEXT_STR. use the datatypes in the CONTEXT_STR as the references for the
+
+Construct a single if ( ... ) statement with:
+
+Each condition enclosed in parentheses
+
+Use appropriate logical connectors: AND, OR
+
+Use operators like: =, <> , <, >, <=, >=
+
+If value is in a list: write it as KPI IN LIST("A", "B")
+
+If value is a range (e.g., between 3 and 5): write as (KPI BETWEEN 3 AND 5)
+
+Ensure that the entire set of conditions from the given in the condition json is reflected in one logical block
+Do not include actions or curly braces, just the if ( ... ) line.
+
+
+Output Format:
+Only output a single line like:
+
+if (<parsed logical condition from conditions>)
+
+Example:
+if (ACCOUNT_TYPE = "prepaid" AND REGION IN LIST("NY", "CA") AND RECHARGE_AMOUNT > 10)
+
+
+Do NOT:
+
+Do not include then, {}, or action blocks
+
+Do not output explanations, markdown, or formatting instructions
+
+Do not generate anything if there are no valid conditions
+
+Use ONLY the conditions provided in CONDITION_JSON to build the IF block.
+Do NOT extract conditions from the ORIGINAL_STATEMENT or from the action/bonus logic.
+Ignore bonus-level, action-level, or nested conditional criteria unless they explicitly appear inside CONDITION_JSON.
+
+
+
+and handle date condition in a separate manner
+
+
+transform the kpis which has if rule based on the date kpis present in the LIST OF KPIs
+Integer KPIs must remain as plain numbers (e.g., PROFILE_DOJ > 365, not "Last 365 days").
+
+
+Input IF-ELSE rules:
+{{ $json.output }}
+
+--------------------------------------------------------------------------------------
+
+Task: Transform the given IF-ELSE rule by analyzing KPIs, conditions, and actions.
+Apply transformations only to **date-type KPIs** (see list). Use the statement for reference and preserve all date-time quantities.
+Non-date KPIs should remain unchanged.
+
+Current date/time: {{ $now }}
+
+**Rules for Transforming DATE-TYPE KPIs (ONLY for KPIs in the list below):**
+
+LIST OF date KPIs in the if rule: {{ $json.date_kpis }}
+(Only KPIs explicitly mentioned above need to be changed. All others remain numeric or string values. strictly follow this)
+
+1. For specific dates/times:
+   - "SpecificDate: YYYY-MM-DD"
+   - "SpecificTime: HH:MM:SS"
+   - "SpecificDateTime: YYYY-MM-DDTHH:MM:SS"
+
+2. For weekdays:
+   - "SpecificDay: <Day Name>"
+
+3. For relative frames:
+   - "Last <Quantity>" / "Next <Quantity>" / "Current <Quantity>"
+   - "Current hour" for "now"
+   - For age ranges (e.g., 18–65 years), use "Last <Quantity>"
+
+4. BETWEEN ranges:
+   - "BETWEEN 'Last/Next/Current ...' AND 'Last/Next/Current ...'"
+   - Replace NOT BETWEEN with < and > operators.
+
+5. General terms:
+   - Keep "today," "tomorrow," "yesterday" as-is unless a KPI requires explicit date formatting.
+
+6. Special cases:
+   - "2024-12-18T10:30:00 +/- N days" →
+     (kpi = "SpecificDateTime: 2024-12-18T10:30:00" AND kpi = "Next/Last N days")
+
+7. use <> for not equal conditions.
+
+**Strict Output Rules:**
+- Only modify RHS of date-type KPI conditions.
+- Never alter KPI names.
+- Always wrap transformed RHS values in double quotes.
+- Output only the modified IF-ELSE rule (no explanations, no extra text).
+- don't add anything on your own in the output and follow what is instructed to you

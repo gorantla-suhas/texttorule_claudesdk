@@ -1,0 +1,38 @@
+# schedule_catalog.yaml
+#
+# Source of truth for schedule types. The orchestrator's `schedule`
+# skill reads this to map a temporal phrase to a canonical schedule
+# type and to validate parameters.
+
+version: 1
+
+schedules:
+
+  - type: one_off
+    requires_start: true
+    requires_end: true
+    supports_window: false
+    supported_recurrences: []
+    timezone_default: Asia/Muscat
+
+  - type: recurring
+    requires_start: true
+    requires_end: false
+    supports_window: false
+    supported_recurrences: [daily, weekly, monthly]
+    timezone_default: Asia/Muscat
+
+  - type: rolling
+    requires_start: false
+    requires_end: false
+    supports_window: true
+    supported_recurrences: []
+    window_units: [days, weeks, months]
+    timezone_default: Asia/Muscat
+
+  - type: blackout_aware
+    requires_start: true
+    requires_end: true
+    supports_window: false
+    supported_recurrences: [daily, weekly, monthly]
+    timezone_default: Asia/Muscat

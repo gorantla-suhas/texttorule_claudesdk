@@ -1,0 +1,4 @@
+id,feature_name,group_id,group_name,kpi_type,description,data_type,time_window_value,search_text,aliases
+1,recharge_amount_30d,10,360_PROFILE,Normal KPI,Total recharge in last 30 days,numeric,30d,recharge amount 30d total sum,recharge_30d
+2,subscriber_type,11,360_PROFILE,Normal KPI,Subscriber type,categorical,,subscriber type prepaid postpaid,sub_type
+3,data_usage_7d,12,Common_Seg_Fct,Normal KPI,Data usage last 7 days,numeric,7d,data usage 7d MB,data_7d

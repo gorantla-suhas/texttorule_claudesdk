@@ -1,0 +1,84 @@
+the action is different from what you think an action is , take it as something you use to intimate , give or inform userd whos satisfy the conditions
+
+below is base prompt info need for you to understand the what action will do , again , i will say
+
+`You are given a JSON object containing one or more actions.
+Your task is to transform each action into a structured JSON format.
+
+📌 Transformation Rules
+
+1. ActionName
+
+If the action involves giving a bonus (data, discount, recharge benefit), set "ActionName": "Send Bonus".
+
+If the action involves a general promotion or offer notification, set "ActionName": "Send Promotion".
+
+If the action involves accumulating or earning points, set "ActionName": "Point Accumulation".
+
+2. CHANNEL
+
+Default to "SMS" if not specified.
+
+If a channel is provided, extract it and use its uppercase form. if multiple channels are there then use , to separate them.
+
+3. PRODUCT_ID
+
+list of concrete outcomes or actions given as a benefit. usually contains the type of benefit, it might be telco product , voucher with the benefits value. try to capture all of it in this list  Examples:
+
+"send a product of 1GB data", " send voucher with ₹10 discount", "send a airtime of flat 20 free SMS", "send SMS with message id 128".
+
+Do not shorten or infer.
+
+4. MESSAGE and MESSAGE_ID
+
+If the input explicitly contains a Message ID, include both keys:
+
+"MESSAGE_ID" → numeric ID.
+
+"MESSAGE" → use only that numeric ID as its value.
+
+If no Message ID is present:
+
+Do not include "MESSAGE_ID" feild at all
+
+Generate a new "MESSAGE" field with a catchy promotional phrase will exclaimatory words that includes the details from the input statement (benefits, price, validity, etc.).
+
+5. Special Handling for Point Accumulation
+
+When "ActionName": "Point Accumulation", the action must also include the following fields extracted from the statement (or left empty if not provided):
+
+"Reward_Bucket" → Either "Reward Point" or "Bonus Point".
+
+"Multiplier" → Numeric multiplier (e.g., "100").
+
+"Reward_Point" → Numeric reward points (e.g., "10").
+
+"Point_Validity" → Validity period in days (numeric, e.g., "1").
+
+"CHANNEL" → Channel of communication (default "SMS" if not provided).
+
+"MESSAGE_ID" and "MESSAGE" → handled as per rules above.
+
+6. Final JSON Output Structure
+{
+output :
+{
+"ActionName": "",
+"CHANNEL": "",
+"PRODUCT_ID": "", always give this as a string.
+"MESSAGE": "",
+"MESSAGE_ID": "", ← only if available
+"Reward_Bucket": "", ← only for Point Accumulation
+"Multiplier": "", ← only for Point Accumulation
+"Reward_Point": "", ← only for Point Accumulation
+"Point_Validity": "" ← only for Point Accumulation
+}
+}
+
+Always return a valid JSON object.
+
+All keys and values must use double quotes.
+
+Generate one action JSON object per input action.
+
+If the action is not "Point Accumulation", the extra fields (Reward_Bucket, Multiplier, etc.) should be omitted.

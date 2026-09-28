@@ -1,0 +1,133 @@
+# action_catalog.yaml
+#
+# Source of truth for action types. The orchestrator's `action` skill
+# reads this to map a marketer phrase to a canonical action type and
+# to validate required parameters.
+#
+# Conventions:
+#   - `type` is the canonical key used everywhere downstream.
+#   - `required_params` must be present in the request or filled from
+#     `default_params`. If neither is possible, the skill returns
+#     `needs_clarification`.
+#   - `product_family` is null for actions that don't bind a product.
+
+version: 1
+
+actions:
+
+  # ---- benefits ----
+  - type: data_bonus
+    category: benefit
+    product_family: data
+    required_params: [amount_mb]
+    optional_params: [validity_days]
+    default_params:
+      validity_days: 30
+
+  - type: voice_bonus
+    category: benefit
+    product_family: voice
+    required_params: [minutes]
+    optional_params: [validity_days]
+    default_params:
+      validity_days: 7
+
+  - type: sms_bonus
+    category: benefit
+    product_family: sms
+    required_params: [count]
+    optional_params: [validity_days]
+    default_params:
+      validity_days: 7
+
+  - type: monetary_credit
+    category: benefit
+    product_family: monetary
+    required_params: [amount, currency]
+    optional_params: []
+
+  # ---- subscription ----
+  - type: subscribe
+    category: subscription
+    product_family: subscription
+    required_params: [product_id]
+    optional_params: [auto_renew]
+    default_params:
+      auto_renew: true
+
+  - type: unsubscribe
+    category: subscription
+    product_family: subscription
+    required_params: [product_id]
+    optional_params: []
+
+  - type: switch_plan
+    category: subscription
+    product_family: subscription
+    required_params: [from_plan, to_plan]
+    optional_params: []
+
+  # ---- lifecycle ----
+  - type: winback
+    category: lifecycle
+    product_family: null
+    required_params: []
+    optional_params: [incentive_type]
+
+  - type: retention
+    category: lifecycle
+    product_family: null
+    required_params: []
+    optional_params: [incentive_type]
+
+  - type: upgrade
+    category: lifecycle
+    product_family: subscription
+    required_params: [to_plan]
+    optional_params: []
+
+  - type: downgrade
+    category: lifecycle
+    product_family: subscription
+    required_params: [to_plan]
+    optional_params: []
+
+  # ---- communication ----
+  - type: send_offer
+    category: communication
+    product_family: null
+    required_params: [channel]
+    optional_params: [template_id]
+    default_params:
+      channel: sms
+
+  - type: send_sms
+    category: communication
+    product_family: null
+    required_params: [template_id]
+    optional_params: []
+
+  - type: send_ussd
+    category: communication
+    product_family: null
+    required_params: [ussd_code]
+    optional_params: []
+
+  # ---- threshold / control ----
+  - type: throttle
+    category: threshold
+    product_family: null
+    required_params: [metric, operator, value]
+    optional_params: []
+
+  - type: cap
+    category: threshold
+    product_family: null
+    required_params: [metric, operator, value]
+    optional_params: []
+
+  - type: uncap
+    category: threshold
+    product_family: null
+    required_params: [metric]
+    optional_params: []

@@ -1,0 +1,60 @@
+# operator_catalog.yaml
+#
+# Source of truth for comparison operators and the data types they are
+# valid for. The `validate_rule` tool reads this to confirm the rule's
+# operator is legal for the column's data type.
+
+version: 1
+
+operators:
+
+  - op: "="
+    label: equals
+    valid_for: [numeric, string, categorical, date]
+
+  - op: "!="
+    label: not_equals
+    valid_for: [numeric, string, categorical, date]
+
+  - op: ">"
+    label: greater_than
+    valid_for: [numeric, date]
+
+  - op: ">="
+    label: greater_than_or_equal
+    valid_for: [numeric, date]
+
+  - op: "<"
+    label: less_than
+    valid_for: [numeric, date]
+
+  - op: "<="
+    label: less_than_or_equal
+    valid_for: [numeric, date]
+
+  - op: between
+    label: between
+    valid_for: [numeric, date]
+    arity: 2
+
+  - op: in
+    label: in_list
+    valid_for: [string, categorical]
+    arity: "1..n"
+
+  - op: not_in
+    label: not_in_list
+    valid_for: [string, categorical]
+    arity: "1..n"
+
+  - op: is_null
+    label: is_null
+    valid_for: [numeric, string, categorical, date]
+
+  - op: is_not_null
+    label: is_not_null
+    valid_for: [numeric, string, categorical, date]
+
+  - op: like
+    label: pattern_match
+    valid_for: [string]

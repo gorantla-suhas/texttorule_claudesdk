@@ -1,0 +1,30 @@
+# clients.yaml
+#
+# Multi-tenant configuration. The orchestrator receives a `client`
+# parameter and uses this file to resolve tenant-specific data paths.
+#
+# Convention: catalogs and overrides live under
+# `data/sdk_context/<topic>/<client>_<name>.<ext>`. There is one global
+# KPI CSV at `data/kpis.csv`; future SQL migration will replace it.
+
+version: 1
+
+clients:
+
+  omantel:
+    display_name: Omantel
+    default_timezone: Asia/Muscat
+    default_currency: OMR
+    kpi_csv: data/kpis.csv
+    products_file: data/sdk_context/catalogs/omantel_products.json
+    bonus_file: data/sdk_context/catalogs/omantel_bonuses.json
+    policy_file: data/sdk_context/policies/omantel_policies.json
+
+  airtel:
+    display_name: Airtel
+    default_timezone: Asia/Kolkata
+    default_currency: INR
+    kpi_csv: data/kpis.csv
+    products_file: data/sdk_context/catalogs/airtel_products.json
+    bonus_file: data/sdk_context/catalogs/airtel_bonuses.json
+    policy_file: data/sdk_context/policies/airtel_policies.json

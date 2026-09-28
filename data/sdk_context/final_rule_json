@@ -1,0 +1,1332 @@
+i will give the complete code which can be taken as reference to the final json parser needed
+
+always get it clear, the input can change the way of input but output need to be maintain as it is,  as its how a rule need to be represented so its dynamic on way input can be represented but static in names need below is example parser
+
+import re
+import json
+from datetime import datetime
+try:
+    from zoneinfo import ZoneInfo
+
+    IST = ZoneInfo("Asia/Kolkata")
+except Exception:
+    IST = None
+
+DATE_FMT = "%d/%m/%Y"
+
+# ============================================================
+# Source lookups (n8n data)
+# ============================================================
+profile_map = {}
+profile_map = {
+    r.json["PROFILE_NAME"]: {
+        "DATA_TYPE": r.json["DATA_TYPE"],
+        "ID": r.json["ID"],
+    }
+    for r in _("Profile_Details").all()
+}
+
+action_map = {}
+action_map = {r.json["NAME"]: r.json["ID"] for r in _("Action_Details").all()}
+
+bonus_details = {}
+for row in _("Bonus_Type_Details").all():
+    act = row.json["ACTION_TYPE"]
+    func = row.json["FUNCTION"]
+    bonus_details.setdefault(act, {})[func] = {
+        "PROFILE_NAME": row.json["PROFILE_NAME"],
+        "TRANSACTION_DATE_PROFILE": row.json["TRANSACTION_DATE_PROFILE"],
+    }
+
+
+# ============================================================
+# Sampling helpers
+# ============================================================
+def select_sampling_id(method, value):
+    method_norm = (method or "").strip().lower()
+    for r in _("Sampling_Details").all():
+        node_data = json.loads(re.sub(r"\|", ":", r.json["NODE_DATA"]))
+        row = {"ID": r.json["ID"], "NODE_DATA": node_data[0]}
+        if not isinstance(row, dict):
+            continue
+        nodes = row.get("NODE_DATA", "")
+        if isinstance(nodes, dict):
+            nodes = [nodes]
+        elif not isinstance(nodes, list):
+            continue
+        for n in nodes:
+            category = str(n.get("category", ""))
+            node_type = str(n.get("nodeType", ""))
+            xml_value = str(n.get("xmlValue", ""))
+            value_raw = str(n.get("value", ""))
+            is_method = any(
+                method_norm in s.lower() for s in (category, node_type, xml_value)
+            )
+            is_value = (str(value) in value_raw) if value is not None else False
+            if is_method and is_value:
+                return row.get("ID", "")
+    return ""
+
+
+def _smart_kv_split(s: str) -> list[str]:
+    parts, buf = [], []
+    in_quote = None
+    paren_depth = 0
+    brace_depth = 0
+    i = 0
+    while i < len(s):
+        ch = s[i]
+        if in_quote:
+            buf.append(ch)
+            if ch == in_quote:
+                in_quote = None
+        else:
+            if ch in ('"', "'"):
+                in_quote = ch
+                buf.append(ch)
+            elif ch == "(":
+                paren_depth += 1
+                buf.append(ch)
+            elif ch == ")":
+                paren_depth -= 1
+                buf.append(ch)
+            elif ch == "{":
+                brace_depth += 1
+                buf.append(ch)
+            elif ch == "}":
+                brace_depth -= 1
+                buf.append(ch)
+            elif ch == "," and paren_depth == 0 and brace_depth == 0:
+                parts.append("".join(buf).strip())
+                buf = []
+            else:
+                buf.append(ch)
+        i += 1
+    if buf:
+        parts.append("".join(buf).strip())
+    return parts
+
+
+def _parse_sampling_kv(blob: str) -> dict:
+    s = blob.strip()
+    if s.startswith("{") and s.endswith("}"):
+        s = s[1:-1].strip()
+    pairs = _smart_kv_split(s)
+    out = {"method": "", "value": ""}
+    for p in pairs:
+        if "=" not in p:
+            continue
+        k, v = p.split("=", 1)
+        k = k.strip().strip('"').strip("'")
+        v = v.strip()
+        if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+            v = v[1:-1]
+        if k.lower() == "method":
+            out["method"] = v.upper()
+        elif k.lower() == "value":
+            out["value"] = v
+    return out
+
+
+# ============================================================
+# Generic parsing helpers
+# ============================================================
+def _parse_semicolon_kv(payload: str) -> dict:
+    s = payload.strip()
+    if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
+        s = s[1:-1]
+    parts = [p.strip() for p in s.split(";") if p.strip()]
+    out = {}
+    for p in parts:
+        if "=" not in p:
+            continue
+        k, v = p.split("=", 1)
+        k = k.strip()
+        v = v.strip().strip('"').strip("'")
+        try:
+            if v.isdigit():
+                v_cast = int(v)
+            else:
+                v_cast = float(v)
+                v_cast = int(v_cast) if v_cast.is_integer() else v_cast
+        except Exception:
+            v_cast = v
+        out[k] = v_cast
+    return out
+
+
+def normalize_rule_string(s: str) -> str:
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def find_balanced(text, open_c, close_c, start=0):
+    i = text.find(open_c, start)
+    if i == -1:
+        return -1, -1
+    depth = 1
+    for j in range(i + 1, len(text)):
+        if text[j] == open_c:
+            depth += 1
+        elif text[j] == close_c:
+            depth -= 1
+            if depth == 0:
+                return i, j
+    return -1, -1
+
+
+def try_cast(val):
+    try:
+        return int(val)
+    except Exception:
+        try:
+            return float(val)
+        except Exception:
+            return val
+
+
+# ============================================================
+# Condition parsing (AND/OR/BETWEEN/IN/LIST)
+# ============================================================
+def parse_conditions(conditions_str: str):
+    conditions_str = conditions_str.strip()
+    if not conditions_str:
+        return {}
+
+    def strip_balanced_parens(s: str) -> str:
+        while s.startswith("(") and s.endswith(")"):
+            depth = 0
+            balanced = True
+            for i, c in enumerate(s):
+                if c == "(":
+                    depth += 1
+                elif c == ")":
+                    depth -= 1
+                    if depth == 0 and i != len(s) - 1:
+                        balanced = False
+                        break
+            if balanced and depth == 0:
+                s = s[1:-1].strip()
+            else:
+                break
+        return s
+
+    def smart_split_ignoring_between(s: str):
+        """
+        Split top-level boolean ANDs, but DO NOT split the AND that belongs to a BETWEEN ... AND ...
+        """
+        parts = []
+        depth = 0
+        i = 0
+        last = 0
+        between_pending = False
+
+        def word_at(pos: int, word: str) -> bool:
+            L = len(word)
+            if pos < 0 or pos + L > len(s):
+                return False
+            seg = s[pos: pos + L]
+            if seg.lower() != word.lower():
+                return False
+            if pos > 0 and s[pos - 1].isalnum():
+                return False
+            if pos + L < len(s) and s[pos + L].isalnum():
+                return False
+            return True
+
+        while i < len(s):
+            ch = s[i]
+            if ch == "(":
+                depth += 1
+                i += 1
+                continue
+            if ch == ")":
+                depth -= 1
+                i += 1
+                continue
+
+            if depth == 0:
+                if word_at(i, "BETWEEN"):
+                    between_pending = True
+                    i += len("BETWEEN")
+                    continue
+
+                if word_at(i, "AND"):
+                    if between_pending:
+                        between_pending = False
+                        i += len("AND")
+                        continue
+                    else:
+                        parts.append(s[last:i].strip())
+                        i += len("AND")
+                        last = i
+                        continue
+            i += 1
+
+        parts.append(s[last:].strip())
+        return [p for p in parts if p != ""]
+
+    def smart_split_or(s: str):
+        parts = []
+        depth = 0
+        i = 0
+        last = 0
+
+        def word_at(pos: int, word: str) -> bool:
+            L = len(word)
+            if pos < 0 or pos + L > len(s):
+                return False
+            seg = s[pos: pos + L]
+            if seg.lower() != word.lower():
+                return False
+            if pos > 0 and s[pos - 1].isalnum():
+                return False
+            if pos + L < len(s) and s[pos + L].isalnum():
+                return False
+            return True
+
+        while i < len(s):
+            ch = s[i]
+            if ch == "(":
+                depth += 1
+                i += 1
+                continue
+            if ch == ")":
+                depth -= 1
+                i += 1
+                continue
+            if depth == 0 and word_at(i, "OR"):
+                parts.append(s[last:i].strip())
+                i += len("OR")
+                last = i
+                continue
+            i += 1
+
+        parts.append(s[last:].strip())
+        return [p for p in parts if p != ""]
+
+    s = strip_balanced_parens(conditions_str)
+
+    or_parts = smart_split_or(s)
+    if len(or_parts) > 1:
+        return {"OR": [parse_conditions(p) for p in or_parts]}
+
+    and_parts = smart_split_ignoring_between(s)
+    if len(and_parts) > 1:
+        return {"AND": [parse_conditions(p) for p in and_parts]}
+
+    return parse_simple_condition(s)
+
+
+def parse_simple_condition(cond: str):
+    cond = cond.strip()
+    if not cond:
+        return {}
+
+    m = re.match(
+        r"^(?P<key>.+?)\s+IN\s+LIST\s*\((?P<vals>.+)\)\s*$",
+        cond,
+        re.IGNORECASE,
+    )
+    if m:
+        key = m.group("key").strip()
+        vals = m.group("vals").strip()
+        value_list = [v.strip().strip('"').strip("'") for v in _smart_kv_split(vals) if v.strip()]
+        return {key: {"in list": value_list}}
+
+    m = re.match(r"^(?P<key>.+?)\s+BETWEEN\s+(?P<rest>.+)$", cond, re.IGNORECASE)
+    if m:
+        key = m.group("key").strip()
+        rest = m.group("rest").strip()
+        if re.search(r"\s+AND\s+", rest, re.IGNORECASE):
+            frm, to = re.split(r"\s+AND\s+", rest, maxsplit=1, flags=re.IGNORECASE)
+            frm, to = frm.strip().strip('"').strip("'"), to.strip().strip('"').strip("'")
+        else:
+            frm, to = rest.strip().strip('"').strip("'"), ""
+        return {key: {"between": [try_cast(frm), try_cast(to)]}}
+
+    if re.search(r"\sIN\s", cond, re.IGNORECASE):
+        left, right = re.split(r"\sIN\s", cond, maxsplit=1, flags=re.IGNORECASE)
+        key = left.strip()
+        value = right.strip()
+        if (value.startswith("[") and value.endswith("]")) or (value.startswith("(") and value.endswith(")")):
+            value = value[1:-1]
+        value_list = [v.strip().strip('"').strip("'") for v in _smart_kv_split(value) if v.strip()]
+        return {key: {"in": value_list}}
+
+    for op in [">=", "<=", ">", "<", "=", "<>"]:
+        token = f" {op} "
+        if token in cond:
+            key, value = cond.split(token, 1)
+            value = value.strip().strip('"').strip("'")
+            if op == "=":
+                return {key.strip(): try_cast(value)}
+            return {key.strip(): {op: try_cast(value)}}
+
+    raise ValueError(f"Cannot parse condition: {cond}")
+
+
+# ============================================================
+# Action / Bonus / Schedule parsing
+# ============================================================
+def parse_action_block(action_str):
+    s = action_str.strip()
+    if not s.lower().startswith("action(") or not s.endswith(")"):
+        raise ValueError(f"Malformed action block: {action_str}")
+    content = s[len("action("): -1].strip()
+    action = {}
+    for part in _smart_kv_split(content):
+        if not part or "=" not in part:
+            continue
+        k, v = part.split("=", 1)
+        k = k.strip()
+        v = v.strip()
+        KU = k.upper()
+        if KU == "SAMPLING":
+            if not (v.startswith("{") and v.endswith("}")):
+                v = v[v.find("{"): v.rfind("}") + 1]
+            action["SAMPLING"] = _parse_sampling_kv(v)
+        elif KU == "BONUS_CRITERIA":
+            if not (v.startswith("{") and v.endswith("}")):
+                v = v[v.find("{"): v.rfind("}") + 1]
+            action[k] = parse_bonus_criteria(v)
+        else:
+            if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+                v = v[1:-1]
+            action[k] = v
+    return action
+
+
+def _strip_outer_braces(blob: str) -> str:
+    blob = blob.strip()
+    if blob.startswith("{") and blob.endswith("}"):
+        return blob[1:-1].strip()
+    return blob
+
+
+def parse_bonus_criteria(raw: str) -> dict:
+    inner = _strip_outer_braces(raw)
+    fields = _smart_kv_split(inner)
+    semikv = {}
+    ben_det = {}
+    extras = {}
+    cond_block = None
+    for token in fields:
+        t = token.strip()
+        if "=" not in t:
+            if t:
+                semikv.update(_parse_semicolon_kv(t))
+            continue
+        k, v = t.split("=", 1)
+        k = k.strip().strip('"').strip("'")
+        v = v.strip()
+        if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+            v = v[1:-1]
+        if k.lower() == "conditions":
+            cond_expr = v.strip()
+            if cond_expr.startswith("(") and cond_expr.endswith(")"):
+                cond_expr = cond_expr[1:-1].strip()
+            if cond_expr:
+                cond_tree = parse_conditions(cond_expr)
+                cond_block = convert_logic_block(cond_tree, pid="0", cid_prefix="0_0")
+        elif k.lower() == "benefit_details":
+            v = v.strip()
+            if v.startswith("{") and v.endswith("}"):
+                v = v[1:-1].strip()
+            pairs = _smart_kv_split(v)
+            for p in pairs:
+                if "=" not in p:
+                    continue
+                bk, bv = p.split("=", 1)
+                bk = bk.strip().strip('"').strip("'")
+                bv = bv.strip()
+                if (bv.startswith('"') and bv.endswith('"')) or (bv.startswith("'") and bv.endswith("'")):
+                    bv = bv[1:-1]
+                ben_det[bk] = bv
+        else:
+            extras[k] = v
+
+    merged = {**semikv, **extras}
+    action_type = merged.get("action_type", "")
+    func = merged.get("aggregation", "")
+    details = bonus_details.get(action_type, {}).get(func, {})
+    crit = {
+        "kpiEnglishName": str(action_type),
+        "kpiProfile": str(details.get("PROFILE_NAME", "")),
+        "transactionDate": str(details.get("TRANSACTION_DATE_PROFILE", "")),
+        "aggregation": str(func),
+        "bonusThreshold": int(merged.get("bonusThreshold", 0) or 0),
+        "noOfTimes": str(merged.get("noOfTimes", "")),
+        "noOfDays": str(merged.get("noOfDays", "")),
+        "value": str(merged.get("value", "")),
+        "maxValue": str(merged.get("maxValue", "")),
+        "childrens": [],
+    }
+
+    if cond_block:
+        if cond_block.get("type") == "condition":
+            cond_block["pid"] = "0_0"
+            cond_block["id"] = "0_0_0"
+            crit["childrens"] = {
+                "id": "0_0",
+                "pid": "0",
+                "type": "conditions",
+                "option": "All",
+                "childrens": cond_block,
+            }
+        else:
+            crit["childrens"] = [cond_block]
+
+    product_id = str(ben_det.get("product_id", "")).strip()
+    result = {"criteria": [crit]}
+    if product_id:
+        result["bonusDetails"] = [
+            {
+                "productId": product_id,
+                "successMessage": "113",
+                "errorMessage": "114",
+            }
+        ]
+    return result
+
+
+def parse_schedule_block(schedule_str):
+    s = schedule_str.strip()
+    if not s.lower().startswith("schedule(") or not s.endswith(")"):
+        if s.lower().startswith("schedule("):
+            _, j = find_balanced(s, "(", ")", s.lower().find("("))
+            if j != -1:
+                s = s[: j + 1]
+        if not s.lower().startswith("schedule(") or not s.endswith(")"):
+            raise ValueError(f"Malformed schedule block: {schedule_str}")
+    content = s[len("schedule("): -1].strip()
+    parts = []
+    buf = []
+    in_quote = None
+    brace_depth = 0  # ✅ NEW: Track { } nesting
+    escaped = False
+
+    for ch in content:
+        if in_quote:
+            buf.append(ch)
+            if escaped:
+                escaped = False  # Reset after escaped char
+            elif ch == "\\":
+                escaped = True   # Next char is escaped
+            elif ch == in_quote:
+                in_quote = None
+        else:
+            if ch in ('"', "'"):
+                in_quote = ch
+                buf.append(ch)
+            elif ch == "{":
+                brace_depth += 1
+                buf.append(ch)
+            elif ch == "}":
+                brace_depth -= 1
+                buf.append(ch)
+            elif ch == "," and brace_depth == 0:
+                parts.append("".join(buf).strip())
+                buf = []
+            else:
+                buf.append(ch)
+
+    if buf:
+        parts.append("".join(buf).strip())
+
+    schedule = {}
+    for part in parts:
+        if not part or "=" not in part:
+            continue
+        k, v = part.split("=", 1)
+        k = k.strip()
+        v = v.strip()
+
+        # Remove outer quotes
+        if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+            v = v[1:-1]
+
+        # ✅ NEW: Check if value is JSON object
+        if v.strip().startswith("{") and v.strip().endswith("}"):
+            try:
+                # Try to parse as JSON
+                schedule[k] = json.loads(v)  # Keep as dict for now
+            except json.JSONDecodeError:
+                schedule[k] = v  # If parsing fails, keep as string
+        else:
+            schedule[k] = v
+    return schedule
+
+
+# ============================================================
+# Rule tree parsing
+# ============================================================
+def parse_rule_tree(rule_str):
+    rule_str = normalize_rule_string(rule_str)
+    schedule_data = None
+    schedule_idx = rule_str.lower().find("schedule(")
+    if schedule_idx != -1:
+        schedule_part = rule_str[schedule_idx:]
+        _, j = find_balanced(schedule_part, "(", ")", schedule_part.find("("))
+        if j != -1:
+            schedule_part = schedule_part[: j + 1]
+        schedule_data = parse_schedule_block(schedule_part)
+        rule_str = rule_str[:schedule_idx].strip()
+
+    nodes = []
+    idx = 0
+    while idx < len(rule_str):
+        m = re.search(r"(if|else if)\s*\(", rule_str[idx:], re.I)
+        if not m:
+            break
+        kind = m.group(1).lower().replace(" ", "")
+        cond_start = idx + m.end()
+        _, cond_end = find_balanced(rule_str, "(", ")", cond_start - 1)
+        if cond_end == -1:
+            raise ValueError("Unbalanced parentheses in condition.")
+        condition = rule_str[cond_start:cond_end].strip()
+        block_brace = rule_str.find("{", cond_end)
+        if block_brace == -1:
+            raise ValueError("Missing '{' after condition.")
+        block_start = block_brace + 1
+        _, block_end = find_balanced(rule_str, "{", "}", block_start - 1)
+        if block_end == -1:
+            raise ValueError("Unbalanced braces in then-block.")
+        then_block = rule_str[block_start:block_end].strip()
+        if then_block.lower().startswith("then"):
+            then_block = then_block[4:].strip()
+
+        node = {}
+        node[kind] = parse_conditions(condition)
+        lower_then = then_block.lower()
+        if lower_then.startswith("action("):
+            node["then"] = parse_action_block(then_block)
+        elif lower_then.startswith("if") or lower_then.startswith("else if"):
+            node["then"] = {"rules": parse_rule_tree(then_block)}
+        else:
+            node["then"] = then_block
+
+        nodes.append(node)
+        idx = block_end + 1
+
+    result = {"rules": nodes}
+    if schedule_data:
+        result["schedule"] = schedule_data
+    return result
+
+
+# ============================================================
+# Lookup helpers
+# ============================================================
+def _lookup_profile_id(name):
+    try:
+        return profile_map.get(name)["ID"]
+    except Exception:
+        return None
+
+
+def _lookup_action_id(name):
+    try:
+        if name in action_map.keys():
+            return action_map[name]
+        return action_map.get("DUMMY", 75)
+    except Exception:
+        return None
+
+
+def _is_date_profile(name: str) -> bool:
+    try:
+        meta = profile_map.get(name) or {}
+        dt = str(meta.get("DATA_TYPE", "")).lower()
+        if dt in ("date", "datetime", "timestamp"):
+            return True
+    except Exception:
+        pass
+    return "date" in str(name).lower()
+
+
+# ============================================================
+# Relative window parsing (Last/Next/Current ...)
+# ============================================================
+_REL_WIN_ANY = re.compile(
+    r"^\s*(last|next|current)\s*(\d+)?\s*(day|days|week|weeks|month|months|hour|hours)?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _cap_plural_units(u: str) -> str:
+    u = (u or "").lower()
+    if u.startswith("day"):
+        return "Days"
+    if u.startswith("week"):
+        return "Weeks"
+    if u.startswith("month"):
+        return "Months"
+    return "Hours"
+
+
+def _cap_singular_units(u: str) -> str:
+    u = (u or "").lower()
+    if u.startswith("day"):
+        return "Day"
+    if u.startswith("week"):
+        return "Week"
+    if u.startswith("month"):
+        return "Month"
+    return "Hour"
+
+
+def _parse_window_to_values(text: str):
+    s = str(text or "")
+    m = _REL_WIN_ANY.match(s)
+    if not m:
+        return None
+
+    dim = m.group(1).lower()
+    num = m.group(2)
+    unit_raw = m.group(3)
+
+    if num:
+        units = _cap_plural_units(unit_raw or "")
+        return {"dimension": dim, "number": str(int(num)), "units": units}
+    else:
+        if dim in ("last", "next"):
+            if unit_raw:
+                units = _cap_plural_units(unit_raw)
+                return {"dimension": dim, "number": "1", "units": units}
+            return None
+        if not unit_raw:
+            return None
+        units = _cap_singular_units(unit_raw)
+        return {"dimension": "current", "units": units}
+
+
+# ============================================================
+# iDate parsing (SpecificTime/SpecificDateTime/SpecificDay...)
+# ============================================================
+_IDATE_SPEC_TIME_RE = re.compile(
+    r"^\s*Specific\s*Time\s*:\s*(\d{2}:\d{2}:\d{2})\s*$", re.IGNORECASE
+)
+_IDATE_SPEC_DATETIME_RE = re.compile(
+    r"^\s*SpecificDateTime\s*:\s*([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})\s*$",
+    re.IGNORECASE,
+)
+_IDATE_SPEC_DAY_RE = re.compile(
+    r"^\s*Specific\s*Day\s*:\s*(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\s*$",
+    re.IGNORECASE,
+)
+_WEEKDAYS = {
+    "monday": "Monday",
+    "tuesday": "Tuesday",
+    "wednesday": "Wednesday",
+    "thursday": "Thursday",
+    "friday": "Friday",
+    "saturday": "Saturday",
+    "sunday": "Sunday",
+}
+
+
+def _parse_idate_value(raw: str) -> dict | None:
+    s = (raw or "").strip()
+
+    m = _IDATE_SPEC_TIME_RE.match(s)
+    if m:
+        return {"dimension": "specificTime", "time": m.group(1)}
+
+    m = _IDATE_SPEC_DATETIME_RE.match(s)
+    if m:
+        return {"dimension": "specificDateTime", "date": m.group(1)}
+
+    m = _IDATE_SPEC_DAY_RE.match(s)
+    if m:
+        day = m.group(1).capitalize()
+        return {"dimension": "specificDay", "day": day}
+
+    low = s.lower()
+    if low == "yesterday":
+        return {"dimension": "Yesterday"}
+    if low == "today":
+        return {"dimension": "today"}
+    if low == "tomorrow":
+        return {"dimension": "tomorrow"}
+
+    if low in _WEEKDAYS:
+        return {"dimension": "specificDay", "day": _WEEKDAYS[low]}
+
+    return None
+
+
+# ============================================================
+# Convert: Action node -> GUI JSON
+# ============================================================
+def convert_action_node(action_dict, pid, cid):
+    def _stringify(v):
+        if v is None:
+            return ""
+        if isinstance(v, (str, int, float, bool)):
+            return str(v)
+        return json.dumps(v, ensure_ascii=False)
+
+    EXCLUDE_FROM_REQUEST = {"ActionName", "SAMPLING", "BONUS_CRITERIA"}
+
+    request_fields = []
+    if isinstance(action_dict, dict):
+        for k, v in action_dict.items():
+            if k in EXCLUDE_FROM_REQUEST:
+                continue
+            request_fields.append({"name": k, "value": _stringify(v)})
+
+    node = {
+        "id": cid,
+        "pid": pid,
+        "type": "action",
+        "action": {"id": _lookup_action_id(action_dict.get("ActionName")), "name": action_dict.get("ActionName")},
+        "field": [
+            {"name": "ActionID", "value": cid},
+            {"name": "ActionCall", "value": "EXTERNAL"},
+            {"name": "ActionName", "value": "UPLOADER_MAIN"},
+            {"name": "ActionURL", "value": "UPLOADER_CALL"},
+            {"name": "ActionType", "value": "ASYNCH"},
+            {"name": "ActionRespURL", "value": "RE_Resp_URL"},
+            {"name": "CDR_SERVICE_ID", "value": "LIFECYCLE_CDR"},
+        ],
+        "request": {"field": request_fields},
+    }
+
+    if "BONUS_CRITERIA" in action_dict and isinstance(action_dict["BONUS_CRITERIA"], dict):
+        node["bonus"] = action_dict["BONUS_CRITERIA"]
+
+    if "SAMPLING" in action_dict and isinstance(action_dict["SAMPLING"], dict):
+        samp = action_dict["SAMPLING"]
+        node["sampling"] = {
+            "name": "",
+            "param": [{"name": "SAMPLING_ID", "value": select_sampling_id(samp.get("method"), samp.get("value"))}],
+            "step": [{"method": samp.get("method", ""), "value": samp.get("value", "")}],
+        }
+
+    return node
+
+
+# ============================================================
+# Convert: Condition -> GUI JSON
+# ============================================================
+def convert_condition(key, value, pid, cid):
+    def _title_units(u_raw: str | None) -> str:
+        if not u_raw:
+            return "Days"
+        u = u_raw.strip().lower()
+        if u.startswith("day"):
+            return "Days"
+        if u.startswith("hour"):
+            return "Hours"
+        if u.startswith("week"):
+            return "Weeks"
+        if u.startswith("month"):
+            return "Months"
+        return "Days"
+
+    REL_RE = re.compile(
+        r"^\s*(Last|Next|Current)\s*(\d+)?\s*(Day|Days|Hour|Hours|Week|Weeks|Month|Months)?\s*$",
+        re.IGNORECASE,
+    )
+    NUM_RE = re.compile(
+        r"^\s*(\d+)\s*(Day|Days|Hour|Hours|Week|Weeks|Month|Months)?\s*$",
+        re.IGNORECASE,
+    )
+    DATE_RE = re.compile(r"^\s*\d{4}-\d{2}-\d{2}\s*$")
+    DATETIME_RE = re.compile(r"^\s*\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\s*$")
+    TIME_RE = re.compile(r"^\s*\d{2}:\d{2}:\d{2}\s*$")
+    DOM_RE = re.compile(r"^\s*(0[1-9]|[12]\d|3[01]|\d)\s*$")
+
+    def _parse_single_date_side(s: str):
+        t = (s or "").strip().strip('"').strip("'")
+
+        if t.lower().startswith("specificdate:"):
+            return {"dimension": "specificDate", "date": t.split(":", 1)[1].strip()}
+        if t.lower().startswith("specificdatetime:"):
+            return {"dimension": "specificDateTime", "date": t.split(":", 1)[1].strip()}
+        if t.lower().startswith("specifictime:"):
+            return {"dimension": "SpecificTime", "time": t.split(":", 1)[1].strip()}
+        if t.lower().startswith("specificday:"):
+            return {"dimension": "specificDay", "day": t.split(":", 1)[1].strip().zfill(2)}
+
+        if DATETIME_RE.match(t):
+            return {"dimension": "specificDateTime", "date": t}
+        if DATE_RE.match(t):
+            return {"dimension": "specificDate", "date": t}
+        if TIME_RE.match(t):
+            return {"dimension": "SpecificTime", "time": t}
+        if DOM_RE.match(t):
+            return {"dimension": "specificDay", "day": t.zfill(2)}
+
+        idate = _parse_idate_value(t)
+        if idate:
+            return idate
+
+        win = _parse_window_to_values(t)
+        if win:
+            return win
+
+        return {"value": t}
+
+    operator = "="
+    val = value
+    if isinstance(value, dict) and len(value) == 1:
+        operator, val = next(iter(value.items()))
+        if isinstance(operator, str) and operator.strip().lower() == "in list":
+            if isinstance(val, (list, tuple)):
+                val = ";".join(str(x) for x in val)
+
+    op_lc = str(operator).strip().lower()
+    values_obj = None
+
+    # Simple BETWEEN for non-date profiles
+    if op_lc == "between" and not _is_date_profile(key):
+        frm, to = (val if isinstance(val, (list, tuple)) else [val, None])[:2]
+        values_obj = {"fromValue": "" if frm is None else str(frm), "toValue": "" if to is None else str(to)}
+
+    # Date-aware BETWEEN block (fallback retained as-is)
+    if values_obj is None and op_lc == "between":
+        frm, to = (val if isinstance(val, (list, tuple)) else [val, None])[:2]
+        values_obj = {"fromValue": "" if frm is None else str(frm), "toValue": "" if to is None else str(to)}
+
+    if values_obj is None:
+        if _is_date_profile(key) and isinstance(val, str):
+            parsed = _parse_single_date_side(val)
+            dim = str(parsed.get("dimension", "")).lower()
+            if dim in ("last", "next"):
+                if dim == "last" and operator in ("<=", "<"):
+                    operator = ">=" if operator == "<=" else ">"
+                elif dim == "next" and operator in (">=", ">"):
+                    operator = "<=" if operator == ">=" else "<"
+            values_obj = parsed if parsed else {"value": val}
+        else:
+            values_obj = {"value": val}
+
+    return {
+        "id": cid,
+        "pid": pid,
+        "type": "condition",
+        "profile": {"id": _lookup_profile_id(key), "name": key},
+        "operator": operator,
+        "values": values_obj,
+    }
+
+
+# ============================================================
+# Convert: Logic blocks (AND/OR nesting)
+# ============================================================
+def convert_logic_block(block, pid="0", cid_prefix="0"):
+    if isinstance(block, dict):
+        for logic_type in ("AND", "OR"):
+            if logic_type in block:
+                children = []
+                for i, cond in enumerate(block[logic_type]):
+                    child_id = f"{cid_prefix}_{i}"
+                    children.append(convert_logic_block(cond, pid=cid_prefix, cid_prefix=child_id))
+                return {
+                    "id": cid_prefix,
+                    "pid": pid,
+                    "type": "conditions",
+                    "option": "All" if logic_type == "AND" else "Any",
+                    "childrens": children,
+                }
+        key, value = next(iter(block.items()))
+        return convert_condition(key, value, pid, cid_prefix)
+    return {}
+
+
+def convert_then_rules(rules, pid, cid_prefix):
+    children = []
+    for i, rule in enumerate(rules):
+        condition_key = "if" if "if" in rule else "elseif"
+        condition = rule.get(condition_key, {})
+        then_action = rule.get("then", {})
+        logic_block = convert_logic_block(condition, pid=cid_prefix, cid_prefix=f"{cid_prefix}_{i}")
+        action_node = convert_action_node(
+            then_action if isinstance(then_action, dict) else {},
+            pid=f"{cid_prefix}_{i}",
+            cid=f"{cid_prefix}_{i}_1",
+        )
+        logic_block.setdefault("childrens", []).append(action_node)
+        children.append(logic_block)
+    return {"id": cid_prefix, "pid": pid, "type": "conditions", "option": "Any", "childrens": children}
+
+
+# ============================================================
+# Schedule helpers
+# ============================================================
+def _schedule_fields_from_dict(schedule: dict) -> list:
+    if not isinstance(schedule, dict):
+        return []
+
+    fields = [{"name": "ScheduleId", "value": schedule.get("ScheduleId", "")}]
+
+    for k, v in schedule.items():
+        if k == "ScheduleId":
+            continue
+
+        # ✅ NEW: Handle nested objects/dicts
+        if isinstance(v, (dict, list)):
+            # Convert to JSON string for output
+            value_str = json.dumps(v, ensure_ascii=False)
+        else:
+            value_str = str(v)
+
+        fields.append({"name": k, "value": value_str})
+
+    return fields
+
+
+def _extract_lead_policy(schedule: dict) -> tuple[list, dict]:
+    """
+    Returns (leadPolicy_block, cleaned_schedule_dict)
+    leadPolicy_block is [] or [{"param":[...]}]
+    """
+    if not isinstance(schedule, dict):
+        return [], schedule
+
+    lp_id = str(schedule.get("LeadPolicyId", "") or "").strip()
+    lp_name = str(schedule.get("LeadPolicyName", "") or "").strip()
+
+    lead_policy = []
+    if lp_id or lp_name:
+        param_list = []
+
+        # Split LeadPolicyId by comma and create separate entries
+        if lp_id:
+            id_values = [v.strip() for v in lp_id.split(",") if v.strip()]
+            for id_val in id_values:
+                param_list.append({"name": "LeadPolicyId", "value": id_val})
+
+        # Add LeadPolicyName if present
+        if lp_name:
+            param_list.append({"name": "LeadPolicyName", "value": lp_name})
+
+        if param_list:
+            lead_policy = [{"param": param_list}]
+
+
+    cleaned = dict(schedule)
+    cleaned.pop("LeadPolicyId", None)
+    cleaned.pop("LeadPolicyName", None)
+
+    return lead_policy, cleaned
+
+
+def _now_ist():
+    if IST is not None:
+        return datetime.now(IST)
+    return datetime.now()
+
+
+def _add_years(dt: datetime, years: int) -> datetime:
+    try:
+        return dt.replace(year=dt.year + years)
+    except ValueError:
+        if dt.month == 2 and dt.day == 29:
+            return dt.replace(year=dt.year + years, day=28)
+        raise
+
+
+def _normalize_time_to_hhmm(time_str: str, fallback_dt: datetime) -> str:
+    s = (time_str or "").strip()
+    m = re.match(r"^\s*(\d{1,2})\s*[:.\s]\s*(\d{1,2})", s)
+    if m:
+        h = max(0, min(23, int(m.group(1))))
+        mnt = max(0, min(59, int(m.group(2))))
+        return f"{h:02d}:{mnt:02d}"
+    m = re.match(r"^\s*(\d{3,4})\s*$", s)
+    if m:
+        digits = m.group(1)
+        if len(digits) == 3:
+            h = int(digits[0])
+            mnt = int(digits[1:])
+        else:
+            h = int(digits[:2])
+            mnt = int(digits[2:])
+        h = max(0, min(23, h))
+        mnt = max(0, min(59, mnt))
+        return f"{h:02d}:{mnt:02d}"
+    return fallback_dt.strftime("%H:%M")
+
+
+def _fill_schedule_defaults(schedule: dict) -> dict:
+    if not isinstance(schedule, dict):
+        return {}
+
+    sd_raw = str(schedule.get("StartDate", "") or "").strip()
+    ed_raw = str(schedule.get("ExpiryDate", "") or "").strip()
+
+    now_dt = _now_ist()
+    start_dt = None
+
+    if sd_raw:
+        try:
+            start_dt = datetime.strptime(sd_raw, DATE_FMT)
+            if IST is not None:
+                start_dt = start_dt.replace(tzinfo=IST)
+        except Exception:
+            start_dt = None
+    if start_dt is None:
+        start_dt = now_dt
+        sd_raw = start_dt.strftime(DATE_FMT)
+
+    if not ed_raw:
+        ed_raw = _add_years(now_dt, 1).strftime(DATE_FMT)
+
+    filled = dict(schedule)
+    filled["StartDate"] = sd_raw
+    filled["ExpiryDate"] = ed_raw
+
+    sn_raw = str(filled.get("ScheduleName", "") or "").strip()
+    if not sn_raw:
+        ts = now_dt.strftime("%Y%m%d_%H%M%S")
+        filled["ScheduleName"] = f"SName_{ts}"
+
+    if "Date" in filled:
+        date_field_raw = str(filled.get("Date", "") or "").strip()
+        if not date_field_raw:
+            filled["Date"] = f"{now_dt.day:02d} 00:00"
+
+    if filled.get("ScheduleType", "").lower() == "weekly" and "Day" in filled:
+        day_raw = str(filled.get("Day", "") or "").strip()
+        if day_raw:
+            DAY_ITEM_RE = re.compile(
+                r"^\s*(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\s+(\d{1,2}):(\d{2})\s*$",
+                re.IGNORECASE,
+            )
+            items = [t.strip() for t in day_raw.split(",") if t.strip()]
+            earliest = {}
+            order = []
+
+            for tok in items:
+                m = DAY_ITEM_RE.match(tok)
+                if not m:
+                    continue
+                day = m.group(1).capitalize()
+                h = max(0, min(23, int(m.group(2))))
+                mn = max(0, min(59, int(m.group(3))))
+                mins = h * 60 + mn
+                if day not in earliest:
+                    earliest[day] = (mins, f"{h:02d}:{mn:02d}")
+                    order.append(day)
+                else:
+                    if mins < earliest[day][0]:
+                        earliest[day] = (mins, f"{h:02d}:{mn:02d}")
+
+            if earliest:
+                normalized = [f"{d} {earliest[d][1]}" for d in order if d in earliest]
+                filled["Day"] = ",".join(normalized)
+
+    if "Time" in schedule and filled.get("ScheduleType", "").lower() != "interval":
+        raw = str(schedule.get("Time", "") or "").strip()
+        if raw:
+            filled["Time"] = _normalize_time_to_hhmm(raw, now_dt)
+        else:
+            filled["Time"] = now_dt.strftime("%H:%M")
+
+    if filled.get("ScheduleType", "").lower() == "interval" and "Interval" in filled:
+        interval_str = str(filled["Interval"]).strip()
+        try:
+            parts = [int(x) for x in interval_str.split(":")]
+            if len(parts) == 3:
+                d, h, m = parts
+            elif len(parts) == 2:
+                d, h, m = 0, parts[0], parts[1]
+            elif len(parts) == 1:
+                d, h, m = 0, parts[0], 0
+            else:
+                d, h, m = 0, 0, 0
+            filled["Days"] = str(max(0, d))
+            filled["Hours"] = str(max(0, h))
+            filled["Minutes"] = str(max(0, m))
+        except Exception:
+            pass
+        filled.pop("Interval", None)
+        filled.pop("StartTime", None)
+    # if filled.get("ScheduleType", "").lower() == "monthly" and "Date" in filled:
+    #     date_raw = str(filled.get("Date", "") or "").strip()
+    #     # Date is like "1 09:00-17:00, 15 09:00-17:00"
+    #     # Just validate format, don't modify
+    #     if date_raw and not re.match(r'^\d+\s+\d{2}:\d{2}-\d{2}:\d{2}(,\s*\d+\s+\d{2}:\d{2}-\d{2}:\d{2})*$', date_raw):
+    #         # Invalid format, provide default
+    #         now_dt = _now_ist()
+    #         filled["Date"] = f"{now_dt.day} 00:00-23:59"
+    return filled
+
+
+def attach_schedule_to_rules(root: dict, schedule: dict) -> None:
+    if not isinstance(root, dict) or not isinstance(schedule, dict):
+        return
+    incoming = _schedule_fields_from_dict(schedule)
+    if not incoming:
+        return
+    if isinstance(root.get("schedule"), dict):
+        existing_fields = root["schedule"].get("field", [])
+        if not isinstance(existing_fields, list):
+            existing_fields = []
+        by_name = {f.get("name"): f for f in existing_fields if isinstance(f, dict) and "name" in f}
+        for f in incoming:
+            nm = f.get("name")
+            if nm in by_name:
+                if not str(by_name[nm].get("value", "")).strip():
+                    by_name[nm]["value"] = f.get("value", "")
+            else:
+                existing_fields.append(f)
+        root["schedule"] = {"field": existing_fields}
+    else:
+        root["schedule"] = {"field": incoming}
+
+
+# ============================================================
+# Final convert: parsed tree -> GUI JSON
+# ============================================================
+def convert_tree_to_gui_json(parsed_tree):
+    schedule = None
+    if isinstance(parsed_tree, dict):
+        schedule = parsed_tree.get("schedule")
+        rules_list = parsed_tree.get("rules", [])
+        if isinstance(rules_list, dict):
+            rules_list = rules_list.get("rules", [])
+    else:
+        rules_list = parsed_tree
+
+    lead_policy_block = []
+    if isinstance(schedule, dict):
+        schedule = _fill_schedule_defaults(schedule)
+        lead_policy_block, schedule = _extract_lead_policy(schedule)
+
+    if not isinstance(rules_list, list):
+        rules_list = []
+
+    root = {"id": "0", "pid": "#", "childrens": []}
+    children_blocks = []
+    use_any_block = len(rules_list) > 1
+
+    for i, rule in enumerate(rules_list):
+        condition_key = "if" if "if" in rule else "elseif"
+        condition = rule.get(condition_key, {})
+
+        if use_any_block:
+            parent_pid = "0_0"
+            cid_prefix = f"{parent_pid}_{i}"
+        else:
+            parent_pid = "0"
+            cid_prefix = "0_0"
+
+        logic_block = convert_logic_block(condition, pid=parent_pid, cid_prefix=cid_prefix)
+        if logic_block.get("type") == "condition":
+            # This is a bare condition, wrap it
+          wrapped_condition = {
+              "id": f"{cid_prefix}_0",
+              "pid": cid_prefix,
+              "type": "condition",
+              "profile": logic_block.get("profile"),
+              "operator": logic_block.get("operator"),
+              "values": logic_block.get("values"),
+          }
+
+          logic_block = {
+              "id": cid_prefix,
+              "pid": parent_pid,
+              "type": "conditions",
+              "option": "All",
+              "childrens": [wrapped_condition]
+          }
+        then_action = rule.get("then", {})
+        nested_rules_container = None
+        if isinstance(then_action, dict) and "rules" in then_action:
+            nested_rules_container = then_action["rules"]
+
+        nested_rules = None
+        if nested_rules_container is not None:
+            if isinstance(nested_rules_container, dict):
+                nested_rules = nested_rules_container.get("rules", [])
+            else:
+                nested_rules = nested_rules_container
+
+        next_child_suffix = 0
+        if isinstance(logic_block, dict) and "childrens" in logic_block:
+            numeric_suffixes = [
+                int(child["id"].split("_")[-1])
+                for child in logic_block["childrens"]
+                if isinstance(child, dict)
+                   and "id" in child
+                   and child["id"].split("_")[-1].isdigit()
+            ]
+            if numeric_suffixes:
+                next_child_suffix = max(numeric_suffixes) + 1
+
+        if nested_rules is not None:
+            nested_id = f"{cid_prefix}_{next_child_suffix}"
+            nested = convert_then_rules(nested_rules, pid=cid_prefix, cid_prefix=nested_id)
+            logic_block.setdefault("childrens", []).append(nested)
+        else:
+            action_id = f"{cid_prefix}_{next_child_suffix}"
+            action_node = convert_action_node(
+                then_action if isinstance(then_action, dict) else {},
+                pid=cid_prefix,
+                cid=action_id,
+            )
+            logic_block.setdefault("childrens", []).append(action_node)
+
+        children_blocks.append(logic_block)
+
+    if use_any_block:
+        any_block = {
+            "id": "0_0",
+            "pid": "0",
+            "type": "conditions",
+            "option": "Any",
+            "childrens": children_blocks
+        }
+        root["childrens"].append(any_block)
+    else:
+        root["childrens"].extend(children_blocks)
+
+    # Attach schedule fields
+    attach_schedule_to_rules(root, schedule if isinstance(schedule, dict) else {})
+
+    # Attach leadPolicy INSIDE schedule (correct location)
+    if lead_policy_block:
+        if "schedule" not in root:
+            root["schedule"] = {}
+        if not isinstance(root["schedule"], dict):
+            root["schedule"] = {}
+        root["schedule"]["leadPolicy"] = lead_policy_block
+
+    detail = {"rules": root}
+    return {"detail": detail}
+
+
+# ============================================================
+# Execution (n8n)
+# ============================================================
+
+
+
+
+
+    # Get the rule string
+rule_string = _("When Executed by Another Workflow").first().json["final_rule"]
+
+print("\n" + "=" * 80)
+print("INPUT RULE:")
+print("=" * 80)
+print(rule_string)
+
+# Parse the rule
+print("\n⚙️ Parsing rule...")
+tree = parse_rule_tree(rule_string)
+
+print("\n" + "=" * 80)
+print("PARSED TREE:")
+print("=" * 80)
+print(json.dumps(tree, indent=2))
+
+# Convert to GUI JSON
+print("\n⚙️ Converting to GUI JSON...")
+final_output = convert_tree_to_gui_json(tree)
+return final_output
+
+

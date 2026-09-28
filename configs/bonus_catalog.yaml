@@ -1,0 +1,57 @@
+# bonus_catalog.yaml
+#
+# Source of truth for bonus types. The orchestrator's `bonus` skill
+# reads this to map a bonus phrase to a canonical bonus type and to
+# validate compatibility with the chosen action.
+
+version: 1
+
+bonuses:
+
+  - type: data
+    family: data
+    default_aggregation: per_subscriber
+    supported_aggregations: [per_subscriber, once, cumulative]
+    compatible_actions: [data_bonus, subscribe, switch_plan, upgrade]
+    default_requirements:
+      active_subscription: false
+
+  - type: voice
+    family: voice
+    default_aggregation: per_subscriber
+    supported_aggregations: [per_subscriber, once, cumulative]
+    compatible_actions: [voice_bonus, subscribe, switch_plan, upgrade]
+    default_requirements:
+      active_subscription: false
+
+  - type: sms
+    family: sms
+    default_aggregation: per_subscriber
+    supported_aggregations: [per_subscriber, once, cumulative]
+    compatible_actions: [sms_bonus, send_sms]
+    default_requirements:
+      active_subscription: false
+
+  - type: monetary
+    family: monetary
+    default_aggregation: once
+    supported_aggregations: [once]
+    compatible_actions: [monetary_credit, send_offer, retention, winback]
+    default_requirements:
+      kyc_complete: true
+
+  - type: loyalty_points
+    family: points
+    default_aggregation: per_subscriber
+    supported_aggregations: [per_subscriber, cumulative]
+    compatible_actions: [send_offer, retention, winback]
+    default_requirements:
+      loyalty_enrolled: true
+
+  - type: free_trial
+    family: subscription
+    default_aggregation: once
+    supported_aggregations: [once]
+    compatible_actions: [subscribe, switch_plan]
+    default_requirements:
+      first_time_only: true
